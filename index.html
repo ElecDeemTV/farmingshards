@@ -1,0 +1,278 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Farming Shard Market</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+:root{color-scheme:dark;--bg:#090d15;--panel:#121a27;--line:#29374a;--text:#edf3ff;--muted:#91a0b7;--green:#5cf0ac;--blue:#70aaff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:Arial, sans-serif}
+header{padding:30px 5%;background:linear-gradient(120deg,#172c40,#090d15);border-bottom:1px solid var(--line)}
+h1{font-size:clamp(28px,4vw,44px);margin:12px 0}
+h2{font-size:20px;margin:0}
+p{color:var(--muted);line-height:1.6}
+.green{color:var(--green)}
+main{max-width:1450px;margin:auto;padding:24px 18px}
+.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+button,select,input{background:#182335;color:var(--text);border:1px solid var(--line);padding:11px 13px;border-radius:8px;font:inherit}
+button{cursor:pointer}
+button:hover{border-color:var(--green)}
+#status{font-size:13px;color:var(--muted);margin-left:auto}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-top:20px}
+.card,.panel{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:18px;min-width:0}
+.label{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
+.value{font-size:clamp(20px,2.5vw,28px);font-weight:bold;margin-top:12px;overflow-wrap:anywhere}
+.section{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:30px 0 14px}
+.chartbox{height:380px}
+.tablebox{overflow-x:auto}
+table{width:100%;border-collapse:collapse;white-space:nowrap;font-size:13px}
+th,td{text-align:left;padding:14px 12px;border-bottom:1px solid var(--line)}
+th{color:var(--muted)}
+tbody tr:hover{background:#192536}
+.id,.muted{font-size:11px;color:var(--muted);margin-top:5px}
+.pill{padding:5px 8px;border-radius:6px;font-size:11px;font-weight:bold;background:#263246;color:#c6d5e8}
+.pill.good{background:#153b30;color:var(--green)}
+.pill.bad{background:#40232b;color:#ff8798}
+footer{text-align:center;color:var(--muted);font-size:12px;padding:30px}
+@media(max-width:800px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.chartbox{height:320px}}
+@media(max-width:450px){main{padding:14px 9px}.card,.panel{padding:12px}#status{width:100%;margin-left:0}}
+</style>
+</head>
+<body>
+<header>
+  <div class="label green">HYPIXEL SKYBLOCK · BAZAAR ANALYTICS</div>
+  <h1>Farming Shard <span class="green">Market</span></h1>
+  <p>Live prices, trading spreads, weekly volume and market comparisons.</p>
+</header>
+
+<main>
+  <div class="toolbar">
+    <button id="refresh">↻ Refresh market</button>
+    <select id="sort">
+      <option value="name">Sort by name</option>
+      <option value="spread">Highest spread</option>
+      <option value="percent">Highest spread %</option>
+      <option value="volume">Highest weekly volume</option>
+    </select>
+    <input id="search" placeholder="Search shards...">
+    <span id="status">Connecting to Hypixel...</span>
+  </div>
+
+  <div class="stats">
+    <div class="card"><div class="label">Tracked shards</div><div class="value">15</div></div>
+    <div class="card"><div class="label">Found in Bazaar</div><div class="value green" id="matched">— / 15</div></div>
+    <div class="card"><div class="label">Best spread per item</div><div class="value green" id="best">—</div><p id="bestName">Waiting for data</p></div>
+    <div class="card"><div class="label">Best spread %</div><div class="value" id="bestPct">—</div><p id="bestPctName">Waiting for data</p></div>
+  </div>
+
+  <div class="section">
+    <h2>Market Chart</h2>
+    <select id="metric">
+      <option value="sell">Sell offer price</option>
+      <option value="buy">Buy order price</option>
+      <option value="spread">Spread per item</option>
+      <option value="volume">Weekly volume</option>
+    </select>
+  </div>
+
+  <div class="panel">
+    <div class="chartbox"><canvas id="chart"></canvas></div>
+    <p class="muted" id="chartInfo">Loading chart...</p>
+  </div>
+
+  <div class="section">
+    <h2>Shard Price Table</h2>
+    <span class="muted" id="updated">Not updated yet</span>
+  </div>
+
+  <div class="panel tablebox">
+    <table>
+      <thead><tr>
+        <th>Shard</th><th>Buy order</th><th>Sell offer</th>
+        <th>Spread</th><th>Spread %</th><th>Weekly volume</th><th>Status</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <div class="section"><h2>Best Trading Opportunity</h2></div>
+  <div class="panel">
+    <div class="label">Highest positive quoted spread</div>
+    <div class="value green" id="recommendation">Waiting for data</div>
+    <p id="recommendationText">The best available opportunity will appear here.</p>
+    <p class="muted">Spread = sell offer price minus buy order price. This is an estimate, not guaranteed profit. Consider liquidity and order execution.</p>
+  </div>
+</main>
+
+<footer>Unofficial community tracker · Hypixel public Bazaar API · Refreshes every 60 seconds</footer>
+
+<script>
+const API = "https://api.hypixel.net/v2/skyblock/bazaar";
+
+/*
+  These are actual Bazaar product IDs found in your API output.
+  Unknown products remain unavailable rather than showing fake prices.
+*/
+const SHARDS = [
+  {name:"Field Mouse", id:"U10", product:null},
+  {name:"Fly", id:"C13", product:"SHARD_FLY"},
+  {name:"Lunar Moth", id:"IDE13", product:"SHARD_LUNAR_MOTH"},
+  {name:"Cricket", id:"U19", product:"SHARD_CRICKET"},
+  {name:"Locust", id:"C28", product:"SHARD_LOCUST"},
+  {name:"Rat", id:"U91", product:"SHARD_RAT"},
+  {name:"Mosquito", id:"U103", product:"SHARD_MOSQUITO"},
+  {name:"Earthworm", id:"U40", product:"SHARD_MUDWORM"},
+  {name:"Mite", id:"U97", product:"SHARD_MITE"},
+  {name:"Moth", id:"U100", product:"SHARD_MOTH"},
+  {name:"Slug", id:"U94", product:"SHARD_KEELED_SLUG"},
+  {name:"Beetle", id:"R16", product:"SHARD_DUNG_BEETLE"},
+  {name:"Firefly", id:"E31", product:"SHARD_FIREFLY"},
+  {name:"Dragon Fly", id:"E37", product:"SHARD_DRAGONFLY"},
+  {name:"Praying Mantis", id:"U22", product:"SHARD_PRAYING_MANTIS"}
+];
+
+let dataRows = SHARDS.map(s => ({
+  ...s, found:false, buy:NaN, sell:NaN, spread:NaN, pct:NaN, volume:0
+}));
+let chart = null;
+const $ = id => document.getElementById(id);
+const fmt = n => Number.isFinite(n) ? n.toLocaleString("en-US",{maximumFractionDigits:3}) : "—";
+const money = n => Number.isFinite(n) ? fmt(n)+" coins" : "—";
+const percent = n => Number.isFinite(n) ? n.toFixed(2)+"%" : "—";
+
+function render() {
+  const query = $("search").value.toLowerCase().trim();
+  const sort = $("sort").value;
+  const shown = dataRows.filter(x => (x.name+" "+x.id).toLowerCase().includes(query));
+
+  shown.sort((a,b) => {
+    if(sort==="name") return a.name.localeCompare(b.name);
+    const key = sort==="spread" ? "spread" : sort==="percent" ? "pct" : "volume";
+    return (Number.isFinite(b[key])?b[key]:-Infinity) -
+           (Number.isFinite(a[key])?a[key]:-Infinity);
+  });
+
+  $("rows").innerHTML = shown.map(x => `
+    <tr>
+      <td><b>${x.name} Shard</b><div class="id">Item ID: ${x.id}</div></td>
+      <td>${money(x.buy)}</td>
+      <td>${money(x.sell)}</td>
+      <td class="${x.spread>0?'green':''}">${money(x.spread)}</td>
+      <td>${percent(x.pct)}</td>
+      <td>${x.found?fmt(x.volume):"—"}</td>
+      <td><span class="pill ${x.found?'good':'bad'}">${x.found?'API match':'Not found'}</span></td>
+    </tr>`).join("");
+
+  const found = dataRows.filter(x=>x.found && Number.isFinite(x.spread));
+  const best = found.filter(x=>x.spread>0).sort((a,b)=>b.spread-a.spread)[0];
+  const bestPct = [...found].filter(x=>Number.isFinite(x.pct)).sort((a,b)=>b.pct-a.pct)[0];
+
+  $("matched").textContent = dataRows.filter(x=>x.found).length+" / 15";
+  $("best").textContent = best ? money(best.spread) : "—";
+  $("bestName").textContent = best ? best.name : "No positive spread";
+  $("bestPct").textContent = bestPct ? percent(bestPct.pct) : "—";
+  $("bestPctName").textContent = bestPct ? bestPct.name : "No market data";
+  $("recommendation").textContent = best ? best.name+" Shard" : "No positive spread found";
+  $("recommendationText").textContent = best
+    ? "Quoted spread: "+money(best.spread)+" per item ("+percent(best.pct)+"). Check market depth before trading."
+    : "No matched item currently has a positive quoted spread.";
+
+  drawChart(shown);
+}
+
+function drawChart(items) {
+  if(typeof Chart==="undefined") {
+    $("chartInfo").textContent="Chart.js could not load. Check your internet connection.";
+    return;
+  }
+  const metric = $("metric").value;
+  const labels = items.map(x=>x.name);
+  const values = items.map(x=>!x.found ? null :
+    metric==="sell" ? x.sell :
+    metric==="buy" ? x.buy :
+    metric==="spread" ? x.spread : x.volume);
+
+  if(chart) chart.destroy();
+  chart = new Chart($("chart"), {
+    type:"bar",
+    data:{
+      labels,
+      datasets:[{
+        label:({sell:"Sell offer price (coins)",buy:"Buy order price (coins)",
+          spread:"Spread per item (coins)",volume:"Weekly volume (items)"})[metric],
+        data:values,
+        backgroundColor:values.map(v=>v===null?"#354155":
+          metric==="spread"&&v<0?"#ff7185":"#5cf0ac"),
+        borderRadius:5
+      }]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:"#edf3ff"}},
+        tooltip:{callbacks:{label:c=>c.raw===null?"No matching product":fmt(c.raw)}}},
+      scales:{
+        x:{ticks:{color:"#91a0b7",maxRotation:45,minRotation:25},grid:{color:"#263449"}},
+        y:{beginAtZero:true,ticks:{color:"#91a0b7"},grid:{color:"#263449"}}
+      }
+    }
+  });
+  $("chartInfo").textContent="Bars are based on the selected Bazaar products. Missing products have no bar.";
+}
+
+async function loadPrices() {
+  $("refresh").disabled=true;
+  $("status").textContent="Loading live prices...";
+  try {
+    const response = await fetch(API,{cache:"no-store"});
+    if(!response.ok) throw Error("HTTP "+response.status);
+    const json = await response.json();
+    if(!json.success || !json.products) throw Error("Invalid API response");
+
+    dataRows = SHARDS.map(s => {
+      const p = s.product ? json.products[s.product] : null;
+      if(!p) return {...s,found:false,buy:NaN,sell:NaN,spread:NaN,pct:NaN,volume:0};
+
+      const q = p.quick_status || {};
+      const buy = Number(q.buyPrice);
+      const sell = Number(q.sellPrice);
+
+      // Buy order price = what instant sellers receive.
+      // Sell offer price = what instant buyers pay.
+      // For a buy-order-to-sell-offer strategy, compare sell minus buy.
+      const spread = sell-buy;
+
+      return {
+        ...s,found:true,buy,sell,spread,
+        pct:buy>0 ? spread/buy*100 : NaN,
+        volume:Number(q.movingWeek)||0
+      };
+    });
+
+    $("status").textContent="● API connected · "+Object.keys(json.products).length+" products";
+    $("status").style.color="var(--green)";
+    $("updated").textContent="Updated "+new Date().toLocaleTimeString();
+    render();
+  } catch(e) {
+    $("status").textContent="API error: "+e.message;
+    $("status").style.color="#ff7185";
+    $("chartInfo").textContent="Prices could not be loaded. The shard list remains visible.";
+    render();
+  } finally {
+    $("refresh").disabled=false;
+  }
+}
+
+$("refresh").addEventListener("click",loadPrices);
+$("search").addEventListener("input",render);
+$("sort").addEventListener("change",render);
+$("metric").addEventListener("change",render);
+
+render();
+loadPrices();
+setInterval(loadPrices,60000);
+</script>
+</body>
+</html>
